@@ -14,6 +14,37 @@ class OlapModeling:
         print(log_df)
         return log_df
 
+    def update_dimension_table(self,log_df_path, dim_file_path, keys, id_column_name):
+        """
+        log_df에서 keys에 해당하는 컬럼을 기준으로 dimension 테이블을 업데이트하는 일반화된 함수
+
+        Parameters:
+        - log_df_path: 로그 CSV 경로
+        - dim_file_path: 저장될 dimension CSV 경로
+        - keys: ['customer_name', 'region'] 또는 ['product_name', 'category']
+        - id_column_name: 'customer_id' 또는 'product_id'
+        """
+        log_df = pd.read_csv(log_df_path)
+
+        if os.path.exists(dim_file_path):
+            dim_df = pd.read_csv(dim_file_path)
+        else:
+            dim_df = pd.DataFrame(columns=[id_column_name] + keys)
+
+        new_entries = log_df[keys].drop_duplicates()
+        merged = new_entries.merge(dim_df, on=keys, how='left', indicator=True)
+        to_add = merged[merged['_merge'] == 'left_only'][keys]
+
+        start_id = dim_df[id_column_name].max() + 1 if not dim_df.empty else 1
+        to_add[id_column_name] = range(start_id, start_id + len(to_add))
+
+        updated_dim = pd.concat([dim_df, to_add], ignore_index=True)
+
+        os.makedirs(os.path.dirname(dim_file_path), exist_ok=True)
+        updated_dim.to_csv(dim_file_path, index=False)
+
+        return updated_dim
+
     def dimension_customer(self,log_df_path,dim_customer_file_path): 
         
         log_df = pd.read_csv(log_df_path)
