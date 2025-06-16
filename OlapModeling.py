@@ -14,8 +14,7 @@ class OlapModeling:
         print(log_df)
         return log_df
 
-    def dimension_customer(self,log_df_path,dim_customer_file_path):
-        
+    def dimension_customer(self,log_df_path,dim_customer_file_path): 
         
         log_df = pd.read_csv(log_df_path)
 
