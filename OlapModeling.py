@@ -7,31 +7,23 @@ class OlapModeling:
         # 파일 경로 지정
         
         AIRFLOW_HOME = os.environ.get("AIRFLOW_HOME", "/opt/airflow")
-        DATE = 20240101
-        file_path = f"{AIRFLOW_HOME}/data/temp/order_log_{DATE}.csv"
+        DATE = 20250601
+        file_path = f"{AIRFLOW_HOME}/data/temp/event_log_{DATE}.csv"
         
         log_df = pd.read_csv(file_path)
         print(log_df)
         return log_df
-
-    def update_dimension_table(self,log_df_path, dim_file_path, keys, id_column_name):
-        """
-        log_df에서 keys에 해당하는 컬럼을 기준으로 dimension 테이블을 업데이트하는 일반화된 함수
-
-        Parameters:
-        - log_df_path: 로그 CSV 경로
-        - dim_file_path: 저장될 dimension CSV 경로
-        - keys: ['customer_name', 'region'] 또는 ['product_name', 'category']
-        - id_column_name: 'customer_id' 또는 'product_id'
-        """
+    
+    def update_dimension_table(self, log_df_path, dim_file_path, keys, id_column_name):
         log_df = pd.read_csv(log_df_path)
+
+        new_entries = log_df[keys].drop_duplicates()
 
         if os.path.exists(dim_file_path):
             dim_df = pd.read_csv(dim_file_path)
         else:
             dim_df = pd.DataFrame(columns=[id_column_name] + keys)
 
-        new_entries = log_df[keys].drop_duplicates()
         merged = new_entries.merge(dim_df, on=keys, how='left', indicator=True)
         to_add = merged[merged['_merge'] == 'left_only'][keys]
 
@@ -40,91 +32,10 @@ class OlapModeling:
 
         updated_dim = pd.concat([dim_df, to_add], ignore_index=True)
 
-        os.makedirs(os.path.dirname(dim_file_path), exist_ok=True)
+        # 저장
         updated_dim.to_csv(dim_file_path, index=False)
 
         return updated_dim
-
-    def dimension_customer(self,log_df_path,dim_customer_file_path): 
-        
-        log_df = pd.read_csv(log_df_path)
-
-        if os.path.exists(dim_customer_file_path):
-            dim_customer = pd.read_csv(dim_customer_file_path)
-        else:
-            dim_customer = pd.DataFrame(columns=['customer_id', 'customer_name', 'region'])
-        
-        ### dim_customer 업데이트
-    
-        # 새로운 고객 정보 추출
-        new_customers = log_df[['customer_name', 'region']].drop_duplicates()
-        
-        # 기존 고객과 비교하여 신규 고객만 추출
-        merged_customers = new_customers.merge(dim_customer, on=['customer_name', 'region'], how='left', indicator=True)
-        new_entries = merged_customers[merged_customers['_merge'] == 'left_only'][['customer_name', 'region']]
-
-        # 새 customer_id 부여
-        start_id = dim_customer['customer_id'].max() + 1 if not dim_customer.empty else 1
-        new_entries['customer_id'] = range(start_id, start_id + len(new_entries))
-        print(new_entries)
-
-        # 업데이트
-        dim_customer_updated = pd.concat([dim_customer, new_entries], ignore_index=True)
-        os.makedirs(os.path.dirname(dim_customer_file_path), exist_ok=True)
-        dim_customer_updated.to_csv(dim_customer_file_path, index=False)
-
-        return dim_customer_updated
-
-    def dimension_product(self, log_df_path ,dim_product_updated_file_path):
-        
-        log_df = pd.read_csv(log_df_path)
-        
-        if os.path.exists(dim_product_updated_file_path):
-            dim_product = pd.read_csv(dim_product_updated_file_path)
-        else:
-            # 컬럼 정의도 같이 해주는 것이 좋음 (일관성 유지)
-            dim_product = pd.DataFrame(columns=['product_id', 'product_name', 'category'])
-        ### dim_product 업데이트
-        new_products = log_df[['product_name', 'category']].drop_duplicates()
-
-        merged_products = new_products.merge(dim_product, on=['product_name', 'category'], how='left', indicator=True)
-        new_product_entries = merged_products[merged_products['_merge'] == 'left_only'][['product_name', 'category']]
-
-        start_id = dim_product['product_id'].max() + 1 if not dim_product.empty else 1
-        new_product_entries['product_id'] = range(start_id, start_id + len(new_product_entries))
-        print(new_product_entries)
-
-        dim_product_updated = pd.concat([dim_product, new_product_entries], ignore_index=True)
-        print(dim_product_updated)
-        os.makedirs(os.path.dirname(dim_product_updated_file_path), exist_ok=True)
-        dim_product_updated.to_csv(dim_product_updated_file_path, index=False)
-        return dim_product_updated
-
-    def fact(self, log_df_path, dim_product_path, dim_customer_path, fact_file_path):
-
-        log_df = pd.read_csv(log_df_path)
-        dim_customer_df = pd.read_csv(dim_customer_path) if os.path.exists(dim_customer_path) else \
-            pd.DataFrame(columns=['customer_name', 'region', 'customer_id'])
-        dim_product_df = pd.read_csv(dim_product_path) if os.path.exists(dim_product_path) else \
-            pd.DataFrame(columns=['product_name', 'category', 'product_id'])
-        fact_order_df = pd.read_csv(fact_file_path) if os.path.exists(fact_file_path) else \
-            pd.DataFrame(columns=['order_id', 'order_date', 'customer_id', 'product_id', 'amount'])
-        
-        # 컬럼 순서 맞춤 (필요시)
-        dim_customer_df = dim_customer_df[['customer_name', 'region', 'customer_id']]
-        dim_product_df = dim_product_df[['product_name', 'category', 'product_id']]
-
-        log_with_ids = log_df.merge(dim_customer_df, on=['customer_name', 'region'], how='left') \
-                         .merge(dim_product_df, on=['product_name', 'category'], how='left')
-
-        fact_new = log_with_ids[['order_id', 'order_date', 'customer_id', 'product_id', 'amount']].drop_duplicates()
-        fact_combined = pd.concat([fact_order_df, fact_new], ignore_index=True)
-        fact_order_updated = fact_combined.drop_duplicates(subset=['order_id'])
-
-        os.makedirs(os.path.dirname(fact_file_path), exist_ok=True)
-        fact_order_updated.to_csv(fact_file_path, index=False)
-        
-        return fact_order_updated
 
     def save(self, dim_customer_path, dim_product_path, fact_order_path):
         def save_file_if_exists(path, expected_columns):
