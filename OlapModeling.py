@@ -3,62 +3,107 @@ import os
 
 class OlapModeling:
 
-    def load(self):
-        # 파일 경로 지정
-        
-        AIRFLOW_HOME = os.environ.get("AIRFLOW_HOME", "/opt/airflow")
-        DATE = 20250601
-        file_path = f"{AIRFLOW_HOME}/data/temp/event_log_{DATE}.csv"
-        
-        log_df = pd.read_csv(file_path)
+    def load(self, date, log_read_path, log_save_path):
+
+        log_df = pd.read_csv(log_read_path)
         print(log_df)
-        return log_df
+        
+        # timestamp → datetime 변환
+        log_df['event_timestamp'] = pd.to_datetime(log_df['timestamp'])
+
+        # date, time 컬럼 생성
+        log_df['date'] = log_df['event_timestamp'].dt.date.astype(str)
+        log_df['time'] = log_df['event_timestamp'].dt.time.astype(str)
+        log_df.to_csv(log_save_path)
     
+        return log_df
+
     def update_dimension_table(self, log_df_path, dim_file_path, keys, id_column_name):
-        log_df = pd.read_csv(log_df_path)
-
+        
+        log_df = pd.read_csv(log_df_path,index_col=0)
+        
         new_entries = log_df[keys].drop_duplicates()
-
+    
         if os.path.exists(dim_file_path):
             dim_df = pd.read_csv(dim_file_path)
         else:
             dim_df = pd.DataFrame(columns=[id_column_name] + keys)
-
+    
+        # update할 dim 간추리기
         merged = new_entries.merge(dim_df, on=keys, how='left', indicator=True)
         to_add = merged[merged['_merge'] == 'left_only'][keys]
-
         start_id = dim_df[id_column_name].max() + 1 if not dim_df.empty else 1
         to_add[id_column_name] = range(start_id, start_id + len(to_add))
 
         updated_dim = pd.concat([dim_df, to_add], ignore_index=True)
-
+        print(updated_dim)
+    
         # 저장
+        os.makedirs(os.path.dirname(dim_file_path), exist_ok=True)
         updated_dim.to_csv(dim_file_path, index=False)
-
+    
         return updated_dim
+    
+    def fact(self, log_df_path, dim_member_path, dim_event_type_path, dim_date_path, dim_time_path, dim_study_path, fact_file_path):
+    
+        log_df = pd.read_csv(log_df_path,index_col=0)
 
-    def save(self, dim_customer_path, dim_product_path, fact_order_path):
-        def save_file_if_exists(path, expected_columns):
-            if os.path.exists(path):
-                try:
-                    df = pd.read_csv(path)
-                    # 파일이 비어 있거나 컬럼이 일치하지 않으면 저장하지 않음
-                    if df.empty:
-                        print(f"⚠️ {path} is empty. Skipping save.")
-                        return
-                    if not all(col in df.columns for col in expected_columns):
-                        print(f"⚠️ {path} has unexpected columns. Skipping save.")
-                        return
-                    df.to_csv(path, index=False)
-                    print(f"✅ {path} 저장 완료")
-                except Exception as e:
-                    print(f"❌ {path} 저장 실패: {e}")
-            else:
-                print(f"⚠️ {path} 파일이 존재하지 않아 저장하지 않음")
+        #dim_event_type 테이블 가지고 오기
+        dim_event_type_df = pd.read_csv(dim_event_type_path) if os.path.exists(dim_event_type_path) else \
+            pd.DataFrame(columns=['event_type_id', 'event'])
+        dim_member_df = pd.read_csv(dim_member_path) if os.path.exists(dim_member_path) else \
+            pd.DataFrame(columns=['member_id', 'dl_member_id'])
+        dim_study_df = pd.read_csv(dim_study_path) if os.path.exists(dim_study_path) else \
+            pd.DataFrame(columns=['study_id', 'dl_study_id'])
+        dim_date_df = pd.read_csv(dim_date_path) if os.path.exists(dim_date_path) else \
+            pd.DataFrame(columns=['date_id', 'date'])
+        dim_time_df = pd.read_csv(dim_time_path) if os.path.exists(dim_time_path) else \
+            pd.DataFrame(columns=['time_id', 'time'])
 
-        save_file_if_exists(dim_customer_path, ['customer_name', 'region', 'customer_id'])
-        save_file_if_exists(dim_product_path, ['product_name', 'category', 'product_id'])
-        save_file_if_exists(fact_order_path, ['order_id', 'order_date', 'customer_id', 'product_id', 'amount'])
+        # log_df에 ID 매핑
+        log_with_ids = log_df \
+            .merge(dim_event_type_df, on='event', how='left') \
+            .merge(dim_member_df, on='dl_member_id', how='left') \
+            .merge(dim_study_df, on='dl_study_id', how='left') \
+            .merge(dim_date_df, on='date', how='left') \
+            .merge(dim_time_df, on='time', how='left')
+        
+        new_fact_event_df = log_with_ids[[
+            'member_id',
+            'event_type_id',
+            'date_id',
+            'time_id',
+            'study_id',
+            'event_timestamp'
+        ]].copy()
 
+        new_fact_event_df = new_fact_event_df[[
+            'member_id',
+            'event_type_id',
+            'date_id',
+            'time_id',
+            'study_id',
+            'event_timestamp'
+        ]]
+
+        # datetime 변환
+        new_fact_event_df['event_timestamp'] = pd.to_datetime(new_fact_event_df['event_timestamp'])
+        new_fact_event_df['date'] = new_fact_event_df['event_timestamp'].dt.strftime('%Y%m%d')
+
+        # 정렬 및 row_number 부여
+        new_fact_event_df = new_fact_event_df.sort_values(by=['event_timestamp'])
+        new_fact_event_df['row_number'] = range(1, len(new_fact_event_df) + 1)
+            
+        # fact_event_id 생성
+        new_fact_event_df['fact_event_id'] = new_fact_event_df['date'] + '_' + new_fact_event_df['row_number'].astype(str).str.zfill(4)
+
+        # 임시 컬럼 제거
+        new_fact_event_df = new_fact_event_df.drop(columns=['date', 'row_number'])
+
+        os.makedirs(os.path.dirname(fact_file_path), exist_ok=True)
+        new_fact_event_df.to_csv(fact_file_path, index=False)
+    
+        return new_fact_event_df
+    
     def send_slack_alert(self):
         print("send_slack")
