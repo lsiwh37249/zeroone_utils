@@ -14,12 +14,14 @@ class OlapModeling:
         # date, time 컬럼 생성
         log_df['date'] = log_df['event_timestamp'].dt.date.astype(str)
         log_df['time'] = log_df['event_timestamp'].dt.time.astype(str)
-        log_df.to_csv(log_save_path)
-    
+        
+        os.makedirs(log_save_path, exist_ok=True)
+        log_df.to_csv(f"{log_save_path}/{date}")
+
+        print(log_df)
         return log_df
 
     def update_dimension_table(self, log_df_path, dim_file_path, keys, id_column_name):
-        
         log_df = pd.read_csv(log_df_path,index_col=0)
         
         new_entries = log_df[keys].drop_duplicates()
@@ -47,7 +49,7 @@ class OlapModeling:
     def fact(self, log_df_path, dim_member_path, dim_event_type_path, dim_date_path, dim_time_path, dim_study_path, fact_file_path):
     
         log_df = pd.read_csv(log_df_path,index_col=0)
-
+        print(f"log_df :{log_df}")
         #dim_event_type 테이블 가지고 오기
         dim_event_type_df = pd.read_csv(dim_event_type_path) if os.path.exists(dim_event_type_path) else \
             pd.DataFrame(columns=['event_type_id', 'event'])
@@ -85,7 +87,8 @@ class OlapModeling:
             'study_id',
             'event_timestamp'
         ]]
-
+        print(new_fact_event_df)
+        
         # datetime 변환
         new_fact_event_df['event_timestamp'] = pd.to_datetime(new_fact_event_df['event_timestamp'])
         new_fact_event_df['date'] = new_fact_event_df['event_timestamp'].dt.strftime('%Y%m%d')
@@ -101,8 +104,8 @@ class OlapModeling:
         new_fact_event_df = new_fact_event_df.drop(columns=['date', 'row_number'])
 
         os.makedirs(os.path.dirname(fact_file_path), exist_ok=True)
-        new_fact_event_df.to_csv(fact_file_path, index=False)
-    
+        new_fact_event_df.to_csv(f"{fact_file_path}.csv", index=False)
+        print(f"new_fact_event_df : {new_fact_event_df}") 
         return new_fact_event_df
     
     def send_slack_alert(self):
